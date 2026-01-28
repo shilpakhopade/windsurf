@@ -84,9 +84,8 @@ jobs:
 
           # Build description
           cat > pr_description.md << 'TEMPLATE_EOF'
-          # Story / Description (include Story number), what are the main changes / for defects, what was the root cause?
-
-          **Story**: $STORY_PLACEHOLDER
+          # Story / Description
+          **Story/Defect**: $STORY_PLACEHOLDER
 
           **Description**:
           <!-- Please provide a detailed description of the changes in this PR -->
