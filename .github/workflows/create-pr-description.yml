@@ -45,9 +45,6 @@ jobs:
           # Get list of changed files
           CHANGED_FILES=$(git diff --name-only origin/$BASE...HEAD | head -20)
 
-          # Get commit messages
-          COMMITS=$(git log origin/$BASE..HEAD --oneline --pretty=format:"- %s" | head -10)
-
           # Save outputs
           echo "story=$STORY" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
@@ -89,9 +86,6 @@ jobs:
 
           **Description**:
           <!-- Please provide a detailed description of the changes in this PR -->
-
-          **Commits in this PR**:
-          $COMMITS_PLACEHOLDER
 
           **Changed Files** ($FILE_COUNT_PLACEHOLDER files):
           ```
