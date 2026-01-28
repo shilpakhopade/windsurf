@@ -1,22 +1,195 @@
-# .github/workflows/pr-comment.yml
-name: PR Review
+name: Create PR Description
+
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened]
+
 permissions:
+  contents: read
   pull-requests: write
-  issues: write
+
+concurrency:
+  group: create-pr-description-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
-  add-comment:
+  populate-description:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
-      - name: Add PR comment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract PR metadata
+        id: metadata
+        run: |
+          # Extract story number from branch name
+          BRANCH="${{ github.head_ref }}"
+          STORY=$(echo "$BRANCH" | grep -oE 'STRY[0-9]+' || echo "N/A")
+
+          # Get base branch
+          BASE="${{ github.base_ref }}"
+
+          # Fetch base branch
+          git fetch origin "$BASE" --depth=100
+
+          # Count files changed
+          FILE_COUNT=$(git diff --name-only origin/$BASE...HEAD | wc -l | tr -d ' ')
+
+          # Get changed files with stats
+          FILES=$(git diff --stat origin/$BASE...HEAD | tail -n 1)
+
+          # Get list of changed files
+          CHANGED_FILES=$(git diff --name-only origin/$BASE...HEAD | head -20)
+
+          # Get commit messages
+          COMMITS=$(git log origin/$BASE..HEAD --oneline --pretty=format:"- %s" | head -10)
+
+          # Save outputs
+          echo "story=$STORY" >> $GITHUB_OUTPUT
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "files_summary=$FILES" >> $GITHUB_OUTPUT
+
+          # Save multiline outputs
+          {
+            echo "changed_files<<EOF"
+            echo "$CHANGED_FILES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          {
+            echo "commits<<EOF"
+            echo "$COMMITS"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build PR description
+        id: build-description
+        env:
+          STORY: ${{ steps.metadata.outputs.story }}
+          FILE_COUNT: ${{ steps.metadata.outputs.file_count }}
+          FILES_SUMMARY: ${{ steps.metadata.outputs.files_summary }}
+          CHANGED_FILES: ${{ steps.metadata.outputs.changed_files }}
+          COMMITS: ${{ steps.metadata.outputs.commits }}
+        run: |
+          # Determine file count checkbox
+          if [ "$FILE_COUNT" -le 15 ]; then
+            FILE_CHECK="x"
+          else
+            FILE_CHECK=" "
+          fi
+
+          # Build description
+          cat > pr_description.md << 'TEMPLATE_EOF'
+          # Story / Description (include Story number), what are the main changes / for defects, what was the root cause?
+
+          **Story**: $STORY_PLACEHOLDER
+
+          **Description**:
+          <!-- Please provide a detailed description of the changes in this PR -->
+
+          **Commits in this PR**:
+          $COMMITS_PLACEHOLDER
+
+          **Changed Files** ($FILE_COUNT_PLACEHOLDER files):
+          ```
+          $CHANGED_FILES_PLACEHOLDER
+          ```
+
+          **Summary**: $FILES_SUMMARY_PLACEHOLDER
+
+          # Testing with correct roles
+          - [ ] Did you test this functionality using the sn_cmdb_admin role?
+
+          # Integration Testing (ITs)
+          - [ ] Did you include a link to an FFB in the Code Review channel - please note any tests that are not passing
+
+          # Unit Testing (UTs)
+          - [ ] Has relevant logic been refactored into reusable, testable functions within script includes?
+              (only small amounts of code inside data brokers, clientscripts etc.)
+
+          - [ ] Are comprehensive unit tests provided for all script includes?
+          - [ ] If no Unit Test is required, have you tagged your story with 'No UT Needed'?
+
+          # Manual Testing?
+          ..
+
+          # UI Screenshots (Applicable only for UX stories/defects):
+          ...
+
+          # Please provide a Thunderdome URL with the changes (for scenarios where it is required)
+          ...
+
+          # PR Best Practices
+          - [$FILE_CHECK_PLACEHOLDER] Is the PR 15 files or less? If not, please add reasoning (lots of ACL files etc.)
+          ...
+
+          ---
+
+          *This PR description was auto-generated. Please review and update as needed.*
+          TEMPLATE_EOF
+
+          # Replace placeholders
+          sed -i.bak "s|\$STORY_PLACEHOLDER|$STORY|g" pr_description.md
+          sed -i.bak "s|\$FILE_COUNT_PLACEHOLDER|$FILE_COUNT|g" pr_description.md
+          sed -i.bak "s|\$FILES_SUMMARY_PLACEHOLDER|$FILES_SUMMARY|g" pr_description.md
+          sed -i.bak "s|\$FILE_CHECK_PLACEHOLDER|$FILE_CHECK|g" pr_description.md
+
+          # Replace multiline content
+          awk -v commits="$COMMITS" '{gsub(/\$COMMITS_PLACEHOLDER/, commits); print}' pr_description.md > pr_description_temp.md
+          mv pr_description_temp.md pr_description.md
+
+          awk -v files="$CHANGED_FILES" '{gsub(/\$CHANGED_FILES_PLACEHOLDER/, files); print}' pr_description.md > pr_description_temp.md
+          mv pr_description_temp.md pr_description.md
+
+          # Output for next step
+          echo "Description built successfully"
+          cat pr_description.md
+
+      - name: Update PR description
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const fs = require('fs');
+            const description = fs.readFileSync('pr_description.md', 'utf8');
+
+            // Get current PR details
+            const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: "👋 Thanks for your PR! A workflow has automatically added this comment."
-            })
+              pull_number: context.issue.number
+            });
+
+            console.log('Current PR body:', pr.body);
+
+            // Only update if PR body is empty or contains default template markers
+            const shouldUpdate = !pr.body ||
+                                 pr.body.trim() === '' ||
+                                 pr.body.includes('...') ||
+                                 pr.body.length < 50;
+
+            if (shouldUpdate) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                body: description
+              });
+
+              console.log('✅ PR description populated successfully');
+
+              // Add a comment to notify
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '🤖 PR description has been auto-generated. Please review and update as needed.'
+              });
+            } else {
+              console.log('ℹ️  PR already has a description, skipping update');
+              console.log('Description length:', pr.body.length);
+            }
