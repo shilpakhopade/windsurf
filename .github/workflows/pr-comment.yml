@@ -2,7 +2,7 @@ name: Create PR Description
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, reopened]
 
 permissions:
   contents: read
